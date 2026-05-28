@@ -1,7 +1,6 @@
 import pandas as pd
 import json
 import time
-
 import sys
 import os
 
@@ -9,19 +8,18 @@ sys.path.append(os.path.abspath(".."))
 
 from llm import ask
 
-# Read claims CSV
 df = pd.read_csv("claims.csv")
 
-results = []
+claims_list = df["claim"].tolist()
 
-for index, row in df.iterrows():
+claims_text = "\n".join(
+    [f"{i+1}. {claim}" for i, claim in enumerate(claims_list)]
+)
 
-    claim = row["claim"]
-
-    prompt = f"""
+prompt = f"""
 You are a P&C insurance claim classifier.
 
-Classify this claim into:
+For EACH claim, classify into:
 
 1. claim_type:
    - auto
@@ -38,71 +36,67 @@ Classify this claim into:
    - yes
    - no
 
-Return ONLY valid JSON.
+Rules:
+- Return ONLY valid JSON
+- Return a JSON ARRAY
+- Keep the original claim text
+- Detect tone carefully
+- Use different tones where appropriate
 
-Example:
-{{
-  "claim_type": "auto",
-  "tone": "calm",
-  "legal_action": "no"
-}}
+Example format:
 
-Claim:
-{claim}
+[
+  {{
+    "claim": "My car was hit yesterday.",
+    "claim_type": "auto",
+    "tone": "frustrated",
+    "legal_action": "no"
+  }}
+]
+
+Claims:
+{claims_text}
 """
 
-    try:
+try:
+    response = ask([
+        {
+            "role": "system",
+            "content": "You are an insurance classification assistant."
+        },
+        {
+            "role": "user",
+            "content": prompt
+        }
+    ])
 
-        response = ask([
-            {
-                "role": "system",
-                "content": "You are an insurance classification assistant."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ])
+    content = response.choices[0].message.content.strip()
 
-        content = response.choices[0].message.content.strip()
+    content = content.replace("```json", "")
+    content = content.replace("```", "")
+    content = content.strip()
 
-        # Remove markdown if model returns ```json
-        content = content.replace("```json", "")
-        content = content.replace("```", "")
-        content = content.strip()
+    print("\nRAW RESPONSE:")
+    print(content)
 
-        print("\nRAW RESPONSE:")
-        print(content)
+    results = json.loads(content)
 
-        parsed = json.loads(content)
+    with open("output.json", "w") as f:
+        json.dump(results, f, indent=4)
 
-        parsed["claim"] = claim
+    print("\nClassification complete!")
+    print("Output saved to output.json")
 
-        results.append(parsed)
+except Exception as e:
 
-        print(f"\nProcessed claim {index + 1}")
+    print("\nError occurred:")
+    print(e)
 
-        # IMPORTANT:
-        # Gemini free tier rate limit fix
-        time.sleep(12)
-
-    except Exception as e:
-
-        print(f"\nError processing claim {index + 1}:")
-        print(e)
-
-        # Add fallback object so all 10 claims exist
-        results.append({
-            "claim": claim,
-            "claim_type": "other",
-            "tone": "calm",
-            "legal_action": "no",
-            "error": str(e)
-        })
-
-# Save JSON output
-with open("output.json", "w") as f:
-    json.dump(results, f, indent=4)
-
-print("\nClassification complete!")
-print("Output saved to output.json")
+    with open("output.json", "w") as f:
+        json.dump(
+            [{
+                "error": str(e)
+            }],
+            f,
+            indent=4
+        )
